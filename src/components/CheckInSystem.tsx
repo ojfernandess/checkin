@@ -25,9 +25,9 @@ const messageTemplates: MessageTemplate = {
   audaar: `Olá {nome}! 🌟
 
 Sua reserva está confirmada!
+Bem-vindo ao {unidade}!
+Seu check-in está agendado para: {checkin}
 Localizador: {localizador}
-Data: {checkin}
-Unidade: {unidade}
 
 Para fazer seu check-in online, acesse: https://pms.audaar.com.br/checkin/vivapp/access
 
