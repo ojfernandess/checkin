@@ -22,7 +22,7 @@ interface MessageTemplate {
 }
 
 const messageTemplates: MessageTemplate = {
-  audaar: `Olá {nome}! ✨
+  audaar: `Olá {nome}! 
 
 Sua reserva está confirmada!
 Bem-vindo ao {unidade}!
@@ -31,8 +31,8 @@ Localizador: {localizador}
 
 Para fazer seu check-in online, acesse: https://pms.audaar.com.br/checkin/vivapp/access
 
-Tenha uma ótima estadia! 🏨✨`,
-  lobie: `Olá {nome}! 🏨
+Tenha uma ótima estadia! `,
+  lobie: `Olá {nome}! 
 
 Bem-vindo ao {unidade}!
 Seu check-in está agendado para: {checkin}
@@ -40,7 +40,7 @@ Localizador: {localizador}
 
 Faça seu check-in online aqui: https://pms.audaar.com.br/checkin/vivapp/access
 
-Aguardamos você! 😉`
+Aguardamos você! `
 };
 
 export function CheckInSystem() {
