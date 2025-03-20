@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { FileSpreadsheet, Send, MessageSquare, Check, Loader2, Calendar, Clock, User, Phone, MapPin } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Workbook } from 'exceljs';
-import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, onValue, remove, DataSnapshot, DatabaseReference } from 'firebase/database';
 
 interface CheckInData {
   Checkin: string;
@@ -24,17 +22,16 @@ interface MessageTemplate {
 }
 
 const messageTemplates: MessageTemplate = {
-  audaar: `Olá {nome}! 
+  audaar: `Olá {nome}! 🌟
 
-Sua reserva está confirmada!
 Bem-vindo ao {unidade}!
 Seu check-in está agendado para: {checkin}
 Localizador: {localizador}
 
 Para fazer seu check-in online, acesse: https://pms.audaar.com.br/checkin/vivapp/access
 
-Tenha uma ótima estadia! `,
-  lobie: `Olá {nome}! 
+Tenha uma ótima estadia! 🏠✨`,
+  lobie: `Olá {nome}! 🏢
 
 Bem-vindo ao {unidade}!
 Seu check-in está agendado para: {checkin}
@@ -42,26 +39,8 @@ Localizador: {localizador}
 
 Faça seu check-in online aqui: https://pms.audaar.com.br/checkin/vivapp/access
 
-Aguardamos você! `
+Aguardamos você! 🔑`
 };
-
-// Firebase configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyCh-5O4XfnvRLKP7vTKgW9EgDmqjCUQfeg",
-  authDomain: "sistema-checkin.firebaseapp.com",
-  databaseURL: "https://sistema-checkin-default-rtdb.firebaseio.com",
-  projectId: "sistema-checkin",
-  storageBucket: "sistema-checkin.appspot.com",
-  messagingSenderId: "507600832031",
-  appId: "1:507600832031:web:9e3fe0b9b40e1ad5bc3c7c"
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const database = getDatabase(app);
-
-// Referência para verificar conectividade
-const connectedRef = ref(database, '.info/connected');
 
 export function CheckInSystem() {
   const [activeTab, setActiveTab] = useState('report');
@@ -81,7 +60,6 @@ export function CheckInSystem() {
   const messageContainerRef = useRef<HTMLDivElement>(null);
   const [sentMessagesDetails, setSentMessagesDetails] = useState<Map<number, { timestamp: string, success: boolean }>>(new Map());
   const [messageTracker, setMessageTracker] = useState<Map<string, { timestamp: string, success: boolean }>>(new Map());
-  const [isFirebaseConnected, setIsFirebaseConnected] = useState(false);
 
   const formatDateToPtBR = (date: string) => {
     if (!date || date.trim() === '') return '';
@@ -184,8 +162,8 @@ export function CheckInSystem() {
     });
     setMessageTracker(newMessageTracker);
     
-    // Salvar no Firebase
-    saveMessagesToFirebase(newMessageTracker);
+    // Salvar no localStorage
+    saveMessagesToLocalStorage(newMessageTracker);
     
     // Definir o índice atual
     setCurrentMessageIndex(index);
@@ -598,13 +576,6 @@ export function CheckInSystem() {
           console.log('Processamento concluído, atualizando estado...');
           setFilteredData(filteredWithSelectedColumns);
           setProcessingStatus(`Encontrados ${filtered.length} check-ins pendentes`);
-          
-          // Quando novos dados são carregados, verificar o histórico para marcar mensagens já enviadas
-          if (messageTracker.size > 0) {
-            console.log('Verificando histórico para os novos dados carregados...');
-            setTimeout(() => identifyPreviouslySentMessages(messageTracker), 500);
-          }
-          
           resolve();
         } catch (error) {
           console.error('Erro durante o processamento do arquivo:', error);
@@ -738,158 +709,14 @@ export function CheckInSystem() {
     setProcessingStatus('Download concluído!');
   };
 
-  // Função para salvar o histórico de mensagens no Firebase
-  const saveMessagesToFirebase = (
-    messagesData: Map<string, { timestamp: string, success: boolean }>
-  ) => {
-    try {
-      // Converter Map para objeto regular para armazenar no Firebase
-      const dataObject: Record<string, { timestamp: string, success: boolean }> = {};
-      messagesData.forEach((value, key) => {
-        dataObject[key] = value;
-      });
-      
-      // Salvar no Firebase com retry
-      const saveWithRetry = (retries = 3) => {
-        const messageHistoryRef = ref(database, 'messageHistory');
-        set(messageHistoryRef, dataObject)
-          .then(() => {
-            console.log('Histórico de mensagens salvo no Firebase com sucesso');
-            setIsFirebaseConnected(true);
-          })
-          .catch((error) => {
-            console.error(`Erro ao salvar no Firebase (tentativa ${4-retries}/3):`, error);
-            if (retries > 0) {
-              console.log(`Tentando novamente em 2 segundos...`);
-              setTimeout(() => saveWithRetry(retries - 1), 2000);
-            } else {
-              console.error('Falha ao salvar no Firebase após várias tentativas');
-              // Fallback para localStorage em caso de erro
-              saveMessagesToLocalStorage(messagesData);
-            }
-          });
-      };
-      
-      // Iniciar tentativas
-      saveWithRetry();
-      
-      // Também salvar no localStorage como backup
-      saveMessagesToLocalStorage(messagesData);
-    } catch (error) {
-      console.error('Erro ao salvar histórico no Firebase:', error);
-      // Fallback para localStorage em caso de erro
-      saveMessagesToLocalStorage(messagesData);
-    }
-  };
-
-  // Função para carregar o histórico de mensagens do Firebase
-  const loadMessagesFromFirebase = () => {
-    try {
-      console.log('Tentando carregar dados do Firebase...');
-      const messageHistoryRef = ref(database, 'messageHistory');
-      
-      // Configurar listener para mudanças nos dados
-      onValue(messageHistoryRef, (snapshot: DataSnapshot) => {
-        const data = snapshot.val();
-        console.log('Dados recebidos do Firebase:', data);
-        
-        if (data) {
-          // Converter objeto Firebase para Map
-          const messagesMap = new Map<string, { timestamp: string, success: boolean }>();
-          Object.entries(data).forEach(([key, value]: [string, any]) => {
-            messagesMap.set(key, {
-              timestamp: value.timestamp,
-              success: value.success
-            });
-          });
-          
-          setMessageTracker(messagesMap);
-          setIsFirebaseConnected(true);
-          console.log('Histórico carregado do Firebase:', messagesMap.size, 'mensagens');
-          
-          // Depois de carregar do Firebase, identificar mensagens já enviadas
-          identifyPreviouslySentMessages(messagesMap);
-        } else {
-          console.log('Nenhum dado encontrado no Firebase');
-          // Se não houver dados no Firebase, tentar o localStorage
-          const localData = loadMessagesFromLocalStorage();
-          if (localData.size > 0) {
-            setMessageTracker(localData);
-            console.log('Firebase sem dados, usando localStorage:', localData.size, 'mensagens');
-            identifyPreviouslySentMessages(localData);
-          }
-        }
-      }, (error: Error) => {
-        console.error('Erro ao ler do Firebase:', error);
-        // Em caso de erro, usar dados do localStorage
-        const localData = loadMessagesFromLocalStorage();
-        setMessageTracker(localData);
-        setIsFirebaseConnected(false);
-        console.log('Erro na conexão com Firebase, usando localStorage:', localData.size, 'mensagens');
-        identifyPreviouslySentMessages(localData);
-      });
-    } catch (error) {
-      console.error('Erro ao configurar listener do Firebase:', error);
-      // Em caso de erro, usar dados do localStorage
-      const localData = loadMessagesFromLocalStorage();
-      setMessageTracker(localData);
-      setIsFirebaseConnected(false);
-      identifyPreviouslySentMessages(localData);
-    }
-  };
-
-  // Nova função auxiliar para identificar mensagens enviadas
-  const identifyPreviouslySentMessages = (messagesData: Map<string, { timestamp: string, success: boolean }>) => {
-    if (filteredData.length === 0) {
-      console.log('Sem dados de check-in para verificar mensagens enviadas');
-      return;
-    }
-    
-    if (messagesData.size === 0) {
-      console.log('Sem histórico de mensagens para verificar');
-      return;
-    }
-    
-    console.log(`Verificando ${filteredData.length} check-ins contra ${messagesData.size} mensagens no histórico...`);
-    const newSentMessages = new Set<number>();
-    const newSentMessagesDetails = new Map<number, { timestamp: string, success: boolean }>();
-    
-    // Para cada linha de dados, verificar se já foi enviada mensagem
-    filteredData.forEach((row, index) => {
-      if (!row.Localizador || !row['Telefone Responsável']) {
-        console.log(`Ignorando linha ${index} - dados incompletos`);
-        return;
-      }
-      
-      // Criar um identificador único para a mensagem
-      const messageId = `${row.Localizador}-${row['Telefone Responsável']}`;
-      
-      // Verificar se existe no histórico
-      if (messagesData.has(messageId)) {
-        newSentMessages.add(index);
-        newSentMessagesDetails.set(index, messagesData.get(messageId)!);
-        console.log(`Mensagem já enviada encontrada: ${messageId}`);
-      }
-    });
-    
-    // Atualizar os estados
-    if (newSentMessages.size > 0) {
-      console.log(`${newSentMessages.size} mensagens já enviadas foram identificadas`);
-      setSentMessages(newSentMessages);
-      setSentMessagesDetails(newSentMessagesDetails);
-    } else {
-      console.log(`Nenhuma mensagem prévia encontrada para os dados atuais`);
-    }
-  };
-
-  // Função para salvar o histórico de mensagens no localStorage (como backup)
+  // Função para salvar o histórico de mensagens no localStorage
   const saveMessagesToLocalStorage = (
     messagesData: Map<string, { timestamp: string, success: boolean }>
   ) => {
     try {
       const serializedData = JSON.stringify(Array.from(messagesData.entries()));
       localStorage.setItem('sentMessagesHistory', serializedData);
-      console.log('Histórico de mensagens salvo no localStorage (backup)');
+      console.log('Histórico de mensagens salvo no localStorage');
     } catch (error) {
       console.error('Erro ao salvar histórico no localStorage:', error);
     }
@@ -911,34 +738,39 @@ export function CheckInSystem() {
 
   // Carregar dados salvos quando o componente inicializa
   useEffect(() => {
-    console.log('Inicializando Firebase e carregando dados...');
-    
-    // Verificar status de conexão
-    onValue(connectedRef, (snap: DataSnapshot) => {
-      const connected = snap.val() === true;
-      console.log('Status de conexão Firebase:', connected ? 'CONECTADO' : 'DESCONECTADO');
-      setIsFirebaseConnected(connected);
-      
-      if (connected) {
-        // Se acabou de conectar, tentar carregar dados
-        loadMessagesFromFirebase();
-      }
-    });
-    
-    // Tentar carregar dados do Firebase primeiro (independente do status de conexão)
-    loadMessagesFromFirebase();
-    
-    // Configurar intervalo para verificar dados a cada 5 minutos
-    const intervalId = setInterval(() => {
-      if (isFirebaseConnected) {
-        console.log('Verificação periódica de dados do Firebase...');
-        loadMessagesFromFirebase();
-      }
-    }, 5 * 60 * 1000);
-    
-    // Limpar intervalo ao desmontar
-    return () => clearInterval(intervalId);
+    const savedMessages = loadMessagesFromLocalStorage();
+    setMessageTracker(savedMessages);
+    console.log('Histórico carregado do localStorage:', savedMessages.size, 'mensagens');
   }, []);
+
+  // Função modificada para identificar mensagens já enviadas quando carregar dados
+  useEffect(() => {
+    if (filteredData.length > 0 && messageTracker.size > 0) {
+      console.log('Verificando mensagens já enviadas...');
+      const newSentMessages = new Set<number>();
+      const newSentMessagesDetails = new Map<number, { timestamp: string, success: boolean }>();
+      
+      // Para cada linha de dados, verificar se já foi enviada mensagem
+      filteredData.forEach((row, index) => {
+        // Criar um identificador único para a mensagem
+        const messageId = `${row.Localizador}-${row['Telefone Responsável']}`;
+        
+        // Verificar se existe no histórico
+        if (messageTracker.has(messageId)) {
+          newSentMessages.add(index);
+          newSentMessagesDetails.set(index, messageTracker.get(messageId)!);
+          console.log(`Mensagem já enviada encontrada: ${messageId}`);
+        }
+      });
+      
+      // Atualizar os estados
+      if (newSentMessages.size > 0) {
+        setSentMessages(newSentMessages);
+        setSentMessagesDetails(newSentMessagesDetails);
+        console.log(`${newSentMessages.size} mensagens já enviadas foram identificadas`);
+      }
+    }
+  }, [filteredData, messageTracker]);
 
   // Função para enviar uma única mensagem e atualizar a interface
   const sendSingleMessage = (index: number) => {
@@ -969,8 +801,8 @@ export function CheckInSystem() {
       });
       setMessageTracker(newMessageTracker);
       
-      // Salvar no Firebase
-      saveMessagesToFirebase(newMessageTracker);
+      // Salvar no localStorage
+      saveMessagesToLocalStorage(newMessageTracker);
       
       // Definir o índice atual para destacar na interface
       setCurrentMessageIndex(index);
@@ -983,21 +815,13 @@ export function CheckInSystem() {
 
   // Função para limpar o histórico
   const clearSentHistory = () => {
-    if (confirm('Tem certeza que deseja limpar todo o histórico de mensagens? Esta ação não pode ser desfeita e afetará todos os usuários do sistema.')) {
+    if (confirm('Tem certeza que deseja limpar todo o histórico de mensagens? Esta ação não pode ser desfeita.')) {
       setSentMessages(new Set());
       setSentMessagesDetails(new Map());
       setMessageTracker(new Map());
       setCurrentMessageIndex(null);
       
-      // Limpar no Firebase
-      try {
-        remove(ref(database, 'messageHistory'));
-        console.log('Histórico removido do Firebase');
-      } catch (error) {
-        console.error('Erro ao remover dados do Firebase:', error);
-      }
-      
-      // Limpar também do localStorage
+      // Limpar do localStorage
       localStorage.removeItem('sentMessagesHistory');
       alert('Histórico de mensagens limpo com sucesso.');
     }
@@ -1028,14 +852,6 @@ export function CheckInSystem() {
     sendSingleMessage(nextIndex);
   };
 
-  // Quando novos dados são carregados, verificar status do Firebase
-  useEffect(() => {
-    if (filteredData.length > 0 && messageTracker.size > 0) {
-      // Tenta identificar mensagens já enviadas após os dados serem carregados
-      identifyPreviouslySentMessages(messageTracker);
-    }
-  }, [filteredData]);
-
   return (
     <div className="min-h-screen bg-gray-100 pb-20">
       <style>
@@ -1064,16 +880,8 @@ export function CheckInSystem() {
         <a href="https://planbcoin.site/previa.html" className="text-white text-lg font-bold hover:text-gray-200 transition-colors">
           SISTEMA DE CHECK-IN 📝
         </a>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center">
-            <span className={`w-2 h-2 rounded-full mr-2 ${isFirebaseConnected ? 'bg-green-400' : 'bg-red-500'}`}></span>
-            <span className="text-white text-xs">
-              {isFirebaseConnected ? 'Online' : 'Offline'}
-            </span>
-          </div>
-          <div className="text-white text-sm">
-            Versão 1.2
-          </div>
+        <div className="text-white text-sm">
+          Versão 1.1
         </div>
       </nav>
 
@@ -1422,12 +1230,7 @@ export function CheckInSystem() {
               {showMessageHistory && (
                 <div className="bg-white rounded-lg shadow-md p-5 max-h-96 overflow-auto border border-gray-200" ref={messageContainerRef}>
                   <div className="flex justify-between items-center mb-4">
-                    <div className="flex items-center">
-                      <h3 className="text-lg font-semibold">Histórico de Mensagens</h3>
-                      <span className={`ml-2 px-2 py-1 text-xs rounded-full ${isFirebaseConnected ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                        {isFirebaseConnected ? 'Sincronizado' : 'Local'}
-                      </span>
-                    </div>
+                    <h3 className="text-lg font-semibold">Histórico de Mensagens</h3>
                     <div className="flex items-center">
                       <span className="text-sm text-gray-500 mr-4">
                         {sentMessages.size} de {filteredData.length} mensagens enviadas
