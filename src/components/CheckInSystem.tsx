@@ -2,6 +2,25 @@ import React, { useState, useRef, useEffect } from 'react';
 import { FileSpreadsheet, Send, MessageSquare, Check, Loader2, Calendar, Clock, User, Phone, MapPin } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Workbook } from 'exceljs';
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, set, onValue, get, child, update } from "firebase/database";
+import { getAuth, signInAnonymously } from "firebase/auth";
+
+// Configuração do Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyB3l8UhFqxq_A2hX-TyEGqyjwQ-16Fwl8s",
+  authDomain: "sistema-checkin-dcd59.firebaseapp.com",
+  projectId: "sistema-checkin-dcd59",
+  storageBucket: "sistema-checkin-dcd59.appspot.com",
+  messagingSenderId: "1002354647777",
+  appId: "1:1002354647777:web:c09f5b8ed95c1e82ca39a9",
+  databaseURL: "https://sistema-checkin-dcd59-default-rtdb.firebaseio.com"
+};
+
+// Inicializar Firebase
+const app = initializeApp(firebaseConfig);
+const database = getDatabase(app);
+const auth = getAuth(app);
 
 interface CheckInData {
   Checkin: string;
@@ -22,7 +41,7 @@ interface MessageTemplate {
 }
 
 const messageTemplates: MessageTemplate = {
-  audaar: `Olá {nome}! 🌟
+  audaar: `Olá {nome}! 
 
 Bem-vindo ao {unidade}!
 Seu check-in está agendado para: {checkin}
@@ -30,8 +49,8 @@ Localizador: {localizador}
 
 Para fazer seu check-in online, acesse: https://pms.audaar.com.br/checkin/vivapp/access
 
-Tenha uma ótima estadia! 🏠✨`,
-  lobie: `Olá {nome}! 🏢
+Tenha uma ótima estadia! `,
+  lobie: `Olá {nome}! 
 
 Bem-vindo ao {unidade}!
 Seu check-in está agendado para: {checkin}
@@ -39,7 +58,7 @@ Localizador: {localizador}
 
 Faça seu check-in online aqui: https://pms.audaar.com.br/checkin/vivapp/access
 
-Aguardamos você! 🔑`
+Aguardamos você! `
 };
 
 export function CheckInSystem() {
@@ -49,9 +68,12 @@ export function CheckInSystem() {
   const [establishment, setEstablishment] = useState('all');
   const [reportUrl, setReportUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState('');
+  const [dragActive, setDragActive] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [parsedData, setParsedData] = useState<CheckInData[]>([]);
   const [filteredData, setFilteredData] = useState<CheckInData[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
-  const [processingStatus, setProcessingStatus] = useState<string>('');
   const [isSendingBulk, setIsSendingBulk] = useState(false);
   const [sendingProgress, setSendingProgress] = useState(0);
   const [sentMessages, setSentMessages] = useState<Set<number>>(new Set());
@@ -60,6 +82,44 @@ export function CheckInSystem() {
   const messageContainerRef = useRef<HTMLDivElement>(null);
   const [sentMessagesDetails, setSentMessagesDetails] = useState<Map<number, { timestamp: string, success: boolean }>>(new Map());
   const [messageTracker, setMessageTracker] = useState<Map<string, { timestamp: string, success: boolean }>>(new Map());
+  const [isOnline, setIsOnline] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'error' | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+
+  // Autenticar anonimamente no Firebase
+  useEffect(() => {
+    const authenticateUser = async () => {
+      try {
+        const userCredential = await signInAnonymously(auth);
+        console.log('Autenticado anonimamente com ID:', userCredential.user.uid);
+        setIsAuthenticated(true);
+      } catch (error) {
+        console.error('Erro na autenticação anônima:', error);
+        setIsAuthenticated(false);
+      }
+    };
+    
+    authenticateUser();
+  }, []);
+
+  // Monitorar status de conexão
+  useEffect(() => {
+    function handleOnlineStatus() {
+      setIsOnline(navigator.onLine);
+    }
+    
+    window.addEventListener('online', handleOnlineStatus);
+    window.addEventListener('offline', handleOnlineStatus);
+    
+    // Verificar o status atual
+    handleOnlineStatus();
+    
+    return () => {
+      window.removeEventListener('online', handleOnlineStatus);
+      window.removeEventListener('offline', handleOnlineStatus);
+    };
+  }, []);
 
   const formatDateToPtBR = (date: string) => {
     if (!date || date.trim() === '') return '';
@@ -709,26 +769,121 @@ export function CheckInSystem() {
     setProcessingStatus('Download concluído!');
   };
 
-  // Função para salvar o histórico de mensagens no localStorage
+  // Função para salvar o histórico de mensagens no localStorage e Firebase
   const saveMessagesToLocalStorage = (
     messagesData: Map<string, { timestamp: string, success: boolean }>
   ) => {
     try {
+      // Salvar no localStorage
       const serializedData = JSON.stringify(Array.from(messagesData.entries()));
       localStorage.setItem('sentMessagesHistory', serializedData);
       console.log('Histórico de mensagens salvo no localStorage');
+      
+      // Se online e autenticado, sincronizar com Firebase
+      if (isOnline && isAuthenticated) {
+        syncWithFirebase(messagesData);
+      }
     } catch (error) {
       console.error('Erro ao salvar histórico no localStorage:', error);
     }
   };
+  
+  // Sincronizar dados com Firebase
+  const syncWithFirebase = async (messagesData: Map<string, { timestamp: string, success: boolean }>) => {
+    try {
+      setSyncStatus('syncing');
+      
+      // Converter o mapa para um objeto para armazenar no Firebase
+      const messagesObject: Record<string, { timestamp: string, success: boolean }> = {};
+      messagesData.forEach((value, key) => {
+        // Substituir pontos por sublinhados para evitar problemas com chaves do Firebase
+        const safeKey = key.replace(/\./g, '_');
+        messagesObject[safeKey] = value;
+      });
+      
+      // Gravar no Firebase
+      const messagesRef = ref(database, 'messages');
+      await set(messagesRef, messagesObject);
+      
+      // Atualizar status de sincronização
+      const now = new Date();
+      const syncTime = `${now.toLocaleDateString()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      setLastSyncTime(syncTime);
+      setSyncStatus('synced');
+      console.log('Dados sincronizados com Firebase em', syncTime);
+    } catch (error) {
+      console.error('Erro ao sincronizar com Firebase:', error);
+      setSyncStatus('error');
+    }
+  };
+  
+  // Carregar dados do Firebase quando estiver online e autenticado
+  useEffect(() => {
+    if (isOnline && isAuthenticated) {
+      const loadFromFirebase = async () => {
+        try {
+          setSyncStatus('syncing');
+          console.log('Tentando carregar dados do Firebase...');
+          
+          const messagesRef = ref(database, 'messages');
+          const snapshot = await get(messagesRef);
+          
+          if (snapshot.exists()) {
+            const firebaseData = snapshot.val();
+            console.log('Dados obtidos do Firebase:', firebaseData);
+            
+            // Converter do formato de objeto para Map
+            const messagesMap = new Map<string, { timestamp: string, success: boolean }>();
+            Object.entries(firebaseData).forEach(([key, value]) => {
+              // Converter chaves de volta substituindo sublinhados por pontos
+              const originalKey = key.replace(/_/g, '.');
+              messagesMap.set(originalKey, value as { timestamp: string, success: boolean });
+            });
+            
+            // Combinar com dados locais
+            const localData = loadMessagesFromLocalStorage();
+            const combinedData = new Map([...localData, ...messagesMap]);
+            
+            // Atualizar o estado
+            setMessageTracker(combinedData);
+            
+            // Salvar a versão combinada de volta no localStorage
+            localStorage.setItem('sentMessagesHistory', JSON.stringify(Array.from(combinedData.entries())));
+            
+            // Atualizar status e horário da sincronização
+            const now = new Date();
+            const syncTime = `${now.toLocaleDateString()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            setLastSyncTime(syncTime);
+            setSyncStatus('synced');
+            
+            console.log('Dados carregados do Firebase e combinados com dados locais');
+          } else {
+            console.log('Nenhum dado encontrado no Firebase');
+            setSyncStatus(null);
+          }
+        } catch (error) {
+          console.error('Erro ao carregar dados do Firebase:', error);
+          setSyncStatus('error');
+        }
+      };
+      
+      loadFromFirebase();
+    }
+  }, [isOnline, isAuthenticated]);
+  
+  // Tentar sincronizar quando voltar a ficar online
+  useEffect(() => {
+    if (isOnline && isAuthenticated && messageTracker.size > 0) {
+      syncWithFirebase(messageTracker);
+    }
+  }, [isOnline, isAuthenticated]);
 
   // Função para carregar o histórico de mensagens do localStorage
-  const loadMessagesFromLocalStorage = (): Map<string, { timestamp: string, success: boolean }> => {
+  const loadMessagesFromLocalStorage = () => {
     try {
       const savedData = localStorage.getItem('sentMessagesHistory');
       if (savedData) {
-        const parsedData = JSON.parse(savedData);
-        return new Map(parsedData);
+        return new Map(JSON.parse(savedData));
       }
     } catch (error) {
       console.error('Erro ao carregar histórico do localStorage:', error);
@@ -880,12 +1035,48 @@ export function CheckInSystem() {
         <a href="https://planbcoin.site/previa.html" className="text-white text-lg font-bold hover:text-gray-200 transition-colors">
           SISTEMA DE CHECK-IN 📝
         </a>
-        <div className="text-white text-sm">
-          Versão 1.1
+        <div className="flex items-center gap-4">
+          <div className="flex items-center">
+            <span className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-400' : 'bg-red-400'}`}></span>
+            <span className="text-white text-xs">{isOnline ? 'Online' : 'Offline'}</span>
+          </div>
+          {isAuthenticated && (
+            <div className="flex items-center">
+              <span className={`w-2 h-2 rounded-full mr-2 ${
+                syncStatus === 'synced' ? 'bg-green-400' : 
+                syncStatus === 'syncing' ? 'bg-yellow-400' : 
+                syncStatus === 'error' ? 'bg-red-400' : 'bg-gray-400'
+              }`}></span>
+              <span className="text-white text-xs">
+                {syncStatus === 'synced' ? 'Sincronizado' : 
+                 syncStatus === 'syncing' ? 'Sincronizando...' : 
+                 syncStatus === 'error' ? 'Erro de sinc.' : 'Não sincronizado'}
+              </span>
+            </div>
+          )}
+          <div className="text-white text-sm">
+            Versão 1.1
+          </div>
         </div>
       </nav>
 
-      <div className="container mx-auto p-4 mt-16">
+      {/* Adicionar notificação quando estiver offline */}
+      {!isOnline && (
+        <div className="fixed top-16 left-0 w-full bg-red-500 text-white text-center py-1 px-4 z-40 flex items-center justify-center">
+          <span className="text-sm">
+            Você está offline. Os dados serão salvos localmente e sincronizados quando a conexão for restaurada.
+          </span>
+        </div>
+      )}
+      
+      {/* Adicionar informação sobre última sincronização */}
+      {isAuthenticated && lastSyncTime && (
+        <div className="fixed top-16 left-0 w-full bg-blue-500 text-white text-center py-1 px-4 z-30">
+          <span className="text-xs">Última sincronização: {lastSyncTime}</span>
+        </div>
+      )}
+
+      <div className={`container mx-auto p-4 ${!isOnline || (isAuthenticated && lastSyncTime) ? 'mt-24' : 'mt-16'}`}>
         <div className="bg-white rounded-lg shadow-lg p-6">
           {processingStatus && (
             <div className="mb-6 p-4 bg-blue-50 text-blue-700 rounded-md flex items-center gap-2 border border-blue-200">
