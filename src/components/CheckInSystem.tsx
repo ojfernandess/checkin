@@ -28,6 +28,7 @@ interface MessageTemplate {
 const messageTemplates: MessageTemplate = {
   audaar: `Olá {nome}! 
 
+Sua reserva está confirmada!
 Bem-vindo ao {unidade}!
 Seu check-in está agendado para: {checkin}
 Localizador: {localizador}
