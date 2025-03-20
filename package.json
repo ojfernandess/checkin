@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@types/xlsx": "^0.0.36",
+    "@vercel/analytics": "^1.5.0",
     "crypto-js": "^4.2.0",
     "exceljs": "^4.4.0",
     "firebase": "^10.10.0",
